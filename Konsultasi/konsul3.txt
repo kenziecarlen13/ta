@@ -1,0 +1,7 @@
+(9 okt)
+menggunakan library untuk verifikasi trend
+
+menambah validasi akhir (apple)
+
+penyesuaian Bahasa dari klasifikasi trend menjadi filter trend
+
