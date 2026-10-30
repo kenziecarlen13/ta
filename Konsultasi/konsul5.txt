@@ -1,0 +1,10 @@
+mencari kelebihan (Mis: drawdown )
+
+memasukkan faktor biaya, membandingkan. 
+
+
+set nilai sl tp (tidak nan) ketika menampilkan, atau menampilkan atr
+
+
+memecah menjadi 3 program (long, sort, gabungan)
+menampilkan data
