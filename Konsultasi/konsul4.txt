@@ -1,1 +1,3 @@
+(16 okt 2026)
+
 menggunakan library backtesting yang valid/sudah teruji..
