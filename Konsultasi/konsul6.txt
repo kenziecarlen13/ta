@@ -1,0 +1,6 @@
+13 (november 2026)
+
+menyiapkan alasan untuk parameter global dibandingkan parameter default
+konten untuk skripsi sudahmasuk akal dan bisa masuk kepenulisan. 
+
+menambahkan min max avrg dari duration (pada table) 
