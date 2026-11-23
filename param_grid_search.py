@@ -23,12 +23,19 @@ from backtesting.lib import FractionalBacktest
 # =============================================================================
 # 1. KONFIGURASI UTAMA & JALUR BERKAS
 # =============================================================================
+# Ubah nilai STRATEGY_MODE langsung di sini sebelum menjalankan skrip:
+# Pilihan valid: "long_only", "short_only", atau "combined"
+STRATEGY_MODE = "combined"
+VALID_MODES = ("long_only", "short_only", "combined")
+if STRATEGY_MODE not in VALID_MODES:
+    raise ValueError(f"STRATEGY_MODE tidak valid: '{STRATEGY_MODE}'. Pilih salah satu: {VALID_MODES}")
+
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data_index"
 if not DATA_DIR.exists():
     DATA_DIR = BASE_DIR.parent / "TugasAkhir" / "data_index"
 
-OUTPUT_EXCEL = BASE_DIR / "Full_Grid_Search_Optimization.xlsx"
+OUTPUT_EXCEL = BASE_DIR / f"Grid_Search_Optimization_{STRATEGY_MODE}.xlsx"
 TARGET_INSTRUMENTS = ["SPY", "QQQ", "DJI"]
 
 INITIAL_CAPITAL = 1000.0
@@ -115,10 +122,11 @@ def prepare_optimization_data(asset):
     d1["ema_fast"] = pd.Series(calc_ema_series(d1["close"], EMA_MACRO_FAST), index=d1.index).shift(1)
     d1["ema_slow"] = pd.Series(calc_ema_series(d1["close"], EMA_MACRO_SLOW), index=d1.index).shift(1)
     d1["macro_bull_alive"] = d1["ema_fast"] >= d1["ema_slow"]
+    d1["macro_bear_alive"] = d1["ema_fast"] <= d1["ema_slow"]
 
     h1 = h1[(h1.index >= pd.to_datetime(START_DATE)) & (h1.index <= pd.to_datetime(END_DATE))]
 
-    d1_sub = d1[["date", "ema_fast", "ema_slow", "macro_bull_alive"]]
+    d1_sub = d1[["date", "ema_fast", "ema_slow", "macro_bull_alive", "macro_bear_alive"]]
     df = pd.merge(h1.reset_index(), d1_sub, on="date", how="left")
     df.ffill(inplace=True)
     df.set_index("datetime", inplace=True)
@@ -132,11 +140,12 @@ def prepare_optimization_data(asset):
 
 
 # =============================================================================
-# 3. STRATEGI & WORKER MULTIPROCESSING (WINDOWS-SAFE)
+# 3. STRATEGI SIMETRIS & WORKER MULTIPROCESSING (WINDOWS-SAFE)
 # =============================================================================
 class OptMTFStrategy(Strategy):
-    """Kelas strategi Long-Only untuk evaluasi kombinasi parameter Grid Search."""
+    """Kelas strategi simetris penuh (identik dengan SymmetricMTFStrategy di ta.ipynb)."""
 
+    mode = STRATEGY_MODE
     atr_mult = 6.0
     cooldown_bars = 7
     min_profit_pct = 0.010
@@ -149,7 +158,9 @@ class OptMTFStrategy(Strategy):
             calc_atr_series, self.data.High, self.data.Low, self.data.Close, self.atr_period_span, overlay=False
         )
         self.macro_bullish = self.I(lambda: self.data.df["macro_bullish"].values, overlay=False)
+        self.macro_bearish = self.I(lambda: self.data.df["macro_bearish"].values, overlay=False)
         self.macro_bull_alive = self.I(lambda: self.data.df["macro_bull_alive"].values, overlay=False)
+        self.macro_bear_alive = self.I(lambda: self.data.df["macro_bear_alive"].values, overlay=False)
         self.bars_since_exit = 999
         self.trailing_sl = 0.0
         self.entry_price = 0.0
@@ -161,27 +172,76 @@ class OptMTFStrategy(Strategy):
         if not self.position:
             self.bars_since_exit += 1
             if self.bars_since_exit >= self.cooldown_bars:
+                long_allowed = self.mode in ["long_only", "combined"]
+                short_allowed = self.mode in ["short_only", "combined"]
+
                 long_trigger = (
-                    self.macro_bullish[-1]
+                    long_allowed
+                    and self.macro_bullish[-1]
                     and (self.data.Low[-2] <= self.ema_micro[-2])
                     and (self.data.Close[-1] > self.ema_micro[-1])
                     and (self.ema_micro[-1] >= self.ema_micro[-2])
                 )
+                short_trigger = (
+                    short_allowed
+                    and self.macro_bearish[-1]
+                    and (self.data.High[-2] >= self.ema_micro[-2])
+                    and (self.data.Close[-1] < self.ema_micro[-1])
+                    and (self.ema_micro[-1] <= self.ema_micro[-2])
+                )
+
                 if long_trigger:
                     self.buy(size=0.9999)
                     self.entry_price = self.data.Close[-1]
                     self.trailing_sl = self.entry_price - (self.atr_mult * self.atr[-1])
-        else:
-            if self.data.Close[-1] >= (self.entry_price * (1.0 + self.min_profit_pct)):
-                new_sl = self.data.Close[-1] - (self.atr_mult * self.atr[-1])
-                self.trailing_sl = max(self.trailing_sl, new_sl)
+                    return
 
-            if self.data.Close[-1] <= self.trailing_sl or not self.macro_bull_alive[-1]:
-                self.position.close()
-                self.bars_since_exit = 0
+                elif short_trigger:
+                    self.sell(size=0.9999)
+                    self.entry_price = self.data.Close[-1]
+                    self.trailing_sl = self.entry_price + (self.atr_mult * self.atr[-1])
+                    return
+        else:
+            if self.position.is_long:
+                if self.data.Close[-1] >= (self.entry_price * (1.0 + self.min_profit_pct)):
+                    new_sl = self.data.Close[-1] - (self.atr_mult * self.atr[-1])
+                    self.trailing_sl = max(self.trailing_sl, new_sl)
+
+                if self.data.Close[-1] <= self.trailing_sl:
+                    self.position.close()
+                    self.bars_since_exit = 0
+                    return
+
+                if not self.macro_bull_alive[-1]:
+                    self.position.close()
+                    self.bars_since_exit = 0
+                    return
+
+            elif self.position.is_short:
+                if self.data.Close[-1] <= (self.entry_price * (1.0 - self.min_profit_pct)):
+                    new_sl = self.data.Close[-1] + (self.atr_mult * self.atr[-1])
+                    self.trailing_sl = min(self.trailing_sl, new_sl)
+
+                if self.data.Close[-1] >= self.trailing_sl:
+                    self.position.close()
+                    self.bars_since_exit = 0
+                    return
+
+                if not self.macro_bear_alive[-1]:
+                    self.position.close()
+                    self.bars_since_exit = 0
+                    return
 
 
 PRELOADED_DATA = {}
+
+
+def _safe_float(val, default=0.0):
+    """Konversi aman ke float untuk mencegah NaN/Inf saat kombinasi menghasilkan 0 transaksi."""
+    if pd.isna(val):
+        return default
+    f_val = float(np.nan_to_num(float(val), nan=default, posinf=default, neginf=default))
+    return 0.0 if f_val == 0.0 else f_val
 
 
 def init_worker(preloaded_dict):
@@ -195,6 +255,7 @@ def evaluate_combination_task(combo_tuple):
     p_spread, p_ema_micro, p_atr_period, p_atr_mult, p_cooldown, p_min_profit = combo_tuple
 
     class TargetStrat(OptMTFStrategy):
+        mode = STRATEGY_MODE
         atr_mult = p_atr_mult
         cooldown_bars = p_cooldown
         min_profit_pct = p_min_profit
@@ -206,6 +267,7 @@ def evaluate_combination_task(combo_tuple):
     for asset in TARGET_INSTRUMENTS:
         base_df = PRELOADED_DATA[asset].copy(deep=False)
         base_df["macro_bullish"] = base_df["ema_fast"] > (base_df["ema_slow"] * (1.0 + p_spread))
+        base_df["macro_bearish"] = base_df["ema_fast"] < (base_df["ema_slow"] * (1.0 - p_spread))
 
         bt = FractionalBacktest(
             base_df,
@@ -218,9 +280,9 @@ def evaluate_combination_task(combo_tuple):
         )
         stats = bt.run()
 
-        asset_returns[asset] = float(stats["Return [%]"])
-        asset_mdds[asset] = float(stats["Max. Drawdown [%]"])
-        asset_trades[asset] = int(stats["# Trades"])
+        asset_returns[asset] = _safe_float(stats["Return [%]"], 0.0)
+        asset_mdds[asset] = _safe_float(stats["Max. Drawdown [%]"], 0.0)
+        asset_trades[asset] = int(_safe_float(stats["# Trades"], 0.0))
 
     avg_return = sum(asset_returns.values()) / len(TARGET_INSTRUMENTS)
     avg_mdd = sum(asset_mdds.values()) / len(TARGET_INSTRUMENTS)
@@ -300,8 +362,8 @@ def main():
 
     cpu_cores = os.cpu_count() or 4
     print("=" * 85)
-    print("FULL GRID SEARCH PARAMETER OPTIMIZATION (EXHAUSTIVE 15.000 KOMBINASI)")
-    print(f"Instrumen Target  : {TARGET_INSTRUMENTS} (Long-Only)")
+    print(f"FULL GRID SEARCH PARAMETER OPTIMIZATION [{STRATEGY_MODE.upper()}] (15.000 KOMBINASI)")
+    print(f"Instrumen Target  : {TARGET_INSTRUMENTS} | Mode: {STRATEGY_MODE}")
     print(f"EMA Makro (1D)    : Fast={EMA_MACRO_FAST}, Slow={EMA_MACRO_SLOW}")
     print(f"Total Kombinasi   : {len(active_combinations):,} | CPU Workers: {cpu_cores} Cores")
     print(f"Berkas Output     : {OUTPUT_EXCEL}")
@@ -324,7 +386,7 @@ def main():
         for fut in tqdm(
             concurrent.futures.as_completed(futures),
             total=len(futures),
-            desc="Full Grid Search",
+            desc=f"Full Grid Search ({STRATEGY_MODE})",
             unit="combo",
         ):
             results_list.append(fut.result())
@@ -333,6 +395,7 @@ def main():
     print(f"\nOptimasi selesai dalam {elapsed_min:.2f} menit ({len(results_list):,} kombinasi).")
 
     df_optim = pd.DataFrame(results_list)
+    df_optim.fillna(0.0, inplace=True)
     df_optim.sort_values(by=["Avg_Total_Return", "Avg_Max_Drawdown"], ascending=[False, False], inplace=True)
     df_optim.reset_index(drop=True, inplace=True)
 
@@ -348,7 +411,7 @@ def main():
     export_to_excel(df_optim_final, OUTPUT_EXCEL)
 
     print(f"\nHasil tersimpan: {OUTPUT_EXCEL}")
-    print("\n>>> TOP 10 PARAMETER UNIVERSAL TERBAIK FULL GRID SEARCH:")
+    print(f"\n>>> TOP 10 PARAMETER UNIVERSAL TERBAIK ({STRATEGY_MODE.upper()}):")
     pd.set_option("display.max_columns", None)
     pd.set_option("display.width", 1000)
     print(df_optim_final.head(10).to_string(index=False))
