@@ -1,9 +1,3 @@
-# =============================================================================
-# MODUL: visualisasi_kinerja.py
-# DESKRIPSI: Pembuat Grafik Batang Berkelompok (Grouped Bar Chart) Dinamis
-# STANDAR: Format Publikasi Ilmiah / Tugas Akhir Informatika (300 DPI)
-# =============================================================================
-
 import os
 import sys
 import numpy as np
@@ -45,7 +39,7 @@ def buat_grafik_grouped_bar(data_dict, mode_list, nama_metrik, judul_grafik, lab
     Menghasilkan grafik batang berkelompok standar publikasi 300 DPI.
     """
     instrumen_keys = ['SPY', 'QQQ', 'DJI', 'AAPL']
-    label_sumbu_x = ['SPY', 'QQQ', 'DJI', 'AAPL (OOS)']
+    label_sumbu_x = ['S&P 500\n(SPY)', 'NASDAQ 100\n(QQQ)', 'DJIA\n(DJI)', 'Apple (AAPL)\n[Out-of-Sample]']
     
     # Palet warna colorblind-safe baku (Wong Palette)
     palet_warna = {
@@ -61,7 +55,7 @@ def buat_grafik_grouped_bar(data_dict, mode_list, nama_metrik, judul_grafik, lab
     x = np.arange(n_instrumen)
     lebar_batang = 0.18
     
-    fig, ax = plt.subplots(figsize=(10, 6), dpi=300)
+    fig, ax = plt.subplots(figsize=(10.5, 6), dpi=300)
     ax.set_axisbelow(True)
     
     # Grid latar belakang berupa garis putus-putus tipis pada sumbu nilai
@@ -118,7 +112,7 @@ def buat_grafik_grouped_bar(data_dict, mode_list, nama_metrik, judul_grafik, lab
     ax.set_xlabel("Instrumen Pengujian", fontsize=10, fontweight='bold', labelpad=10)
     ax.set_ylabel(label_sumbu_y, fontsize=10, fontweight='bold', labelpad=10)
     ax.set_xticks(x)
-    ax.set_xticklabels(label_sumbu_x, fontsize=10)
+    ax.set_xticklabels(label_sumbu_x, fontsize=10, fontweight='bold')
     
     if batas_y is not None:
         ax.set_ylim(batas_y)
